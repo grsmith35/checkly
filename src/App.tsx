@@ -18,6 +18,7 @@ import {
   updateTask,
 } from "./lib/logic";
 import { formatNice, fromISODate, toISODate } from "./lib/date";
+import { computeInitialDueDate } from "./lib/recurrence";
 
 type Tab = "today" | "tasks" | "settings";
 
@@ -117,12 +118,49 @@ function Pill({ children }: { children: React.ReactNode }) {
   return <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">{children}</span>;
 }
 
-function recurrenceLabel(r: RecurrenceRule) {
+const monthNames = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function recurrenceLabel(task: Task) {
+  const r = task.recurrence;
   if (r.kind === "none") return "One-time";
   const unit = r.unit;
   const int = r.interval;
+
+  if (unit === "year" && task.recurrenceMonth) {
+    const month = monthNames[task.recurrenceMonth - 1] ?? `Month ${task.recurrenceMonth}`;
+    const week = task.recurrenceWeek ? ` (week ${task.recurrenceWeek})` : "";
+    if (int === 1) return `Every ${month}${week}`;
+    return `Every ${int} years in ${month}${week}`;
+  }
+
+  if (unit === "month" && task.recurrenceWeek) {
+    if (int === 1) return `Every month (week ${task.recurrenceWeek})`;
+    return `Every ${int} months (week ${task.recurrenceWeek})`;
+  }
+
   if (int === 1) return `Every ${unit}`;
   return `Every ${int} ${unit}s`;
+}
+
+function plannedLabel(t: Task) {
+  if (t.recurrence.kind !== "none") return null;
+  if (!t.plannedMonth) return null;
+  const month = monthNames[t.plannedMonth - 1] ?? `Month ${t.plannedMonth}`;
+  if (t.plannedWeek) return `Planned: ${month} (week ${t.plannedWeek})`;
+  return `Planned: ${month}`;
 }
 
 function categoryName(categories: Category[], id: string) {
@@ -159,6 +197,13 @@ export default function App() {
   const dueToday = useMemo(() => getDueToday(state, today), [state, today]);
   const overdue = useMemo(() => getOverdue(state, today), [state, today]);
   const anytime = useMemo(() => getAnytime(state), [state]);
+  const plannedRecurring = useMemo(
+    () =>
+      state.tasks
+        .filter((t) => !t.archived && !t.completedAt)
+        .filter((t) => t.recurrence.kind !== "none" && (t.recurrenceMonth || t.recurrenceWeek)),
+    [state.tasks]
+  );
 
   const editingTask = useMemo(
     () => state.tasks.find((t) => t.id === editTaskId) ?? null,
@@ -225,7 +270,7 @@ export default function App() {
                         <div className="text-xs text-gray-500 flex gap-2 mt-1">
                           <span>{categoryName(state.categories, t.categoryId)}</span>
                           <span>•</span>
-                          <span>{recurrenceLabel(t.recurrence)}</span>
+                          <span>{recurrenceLabel(t)}</span>
                         </div>
                       </button>
                     </div>
@@ -276,6 +321,7 @@ export default function App() {
                     .map((t) => {
                       const done = !!t.completedAt;
                       const due = t.recurrence.kind !== "none" ? t.nextDueDate : t.dueDate;
+                      const planned = !due ? plannedLabel(t) : null;
                       return (
                         <button
                           key={t.id}
@@ -292,11 +338,17 @@ export default function App() {
                           <div className="text-xs text-gray-500 flex flex-wrap gap-2 mt-1">
                             <span>{categoryName(state.categories, t.categoryId)}</span>
                             <span>•</span>
-                            <span>{recurrenceLabel(t.recurrence)}</span>
+                            <span>{recurrenceLabel(t)}</span>
                             {due && (
                               <>
                                 <span>•</span>
                                 <span>Due: {due}</span>
+                              </>
+                            )}
+                            {planned && (
+                              <>
+                                <span>•</span>
+                                <span>{planned}</span>
                               </>
                             )}
                           </div>
@@ -310,7 +362,35 @@ export default function App() {
                 </div>
               </Section>
 
-              <Section title="Anytime (no due date)">
+              <Section title="Planned Recurring">
+                <div className="space-y-2">
+                  {plannedRecurring.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setEditTaskId(t.id)}
+                      className="w-full p-3 rounded-xl border border-gray-200 bg-white text-left"
+                    >
+                      <div className="font-medium">{t.title}</div>
+                      <div className="text-xs text-gray-500 flex flex-wrap gap-2 mt-1">
+                        <span>{categoryName(state.categories, t.categoryId)}</span>
+                        <span>•</span>
+                        <span>{recurrenceLabel(t)}</span>
+                        {t.nextDueDate && (
+                          <>
+                            <span>•</span>
+                            <span>Next: {t.nextDueDate}</span>
+                          </>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                  {plannedRecurring.length === 0 && (
+                    <div className="text-sm text-gray-500">No planned recurring tasks.</div>
+                  )}
+                </div>
+              </Section>
+
+              <Section title="Anytime (no due date or plan)">
                 <div className="space-y-2">
                   {anytime.map((t) => (
                     <button
@@ -465,6 +545,7 @@ export default function App() {
             <EditTask
               task={editingTask}
               categories={state.categories}
+              today={today}
               onSave={(patch) => setState((s) => updateTask(s, editingTask.id, patch))}
               onComplete={() => setState((s) => completeTask(s, editingTask.id, today))}
               onDelete={() => {
@@ -540,6 +621,10 @@ function QuickAddTask({
   const [interval, setInterval] = useState(1);
   const [unit, setUnit] = useState<"day" | "week" | "month" | "year">("week");
   const [dueDate, setDueDate] = useState<string>("");
+  const [plannedMonth, setPlannedMonth] = useState<number | "">("");
+  const [plannedWeek, setPlannedWeek] = useState<number | "">("");
+  const [recurrenceMonth, setRecurrenceMonth] = useState<number | "">("");
+  const [recurrenceWeek, setRecurrenceWeek] = useState<number | "">("");
 
   const isRecurring = recurrence.kind !== "none";
 
@@ -601,6 +686,8 @@ function QuickAddTask({
               const u = e.target.value as any;
               setUnit(u);
               setRecurrence({ kind: "every", interval, unit: u });
+              if (u !== "year") setRecurrenceMonth("");
+              if (u !== "year" && u !== "month") setRecurrenceWeek("");
             }}
             className="w-full p-3 rounded-xl border border-gray-200 bg-white"
           >
@@ -621,9 +708,94 @@ function QuickAddTask({
           <input
             type="date"
             value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setDueDate(next);
+              if (next) {
+                setPlannedMonth("");
+                setPlannedWeek("");
+              }
+            }}
             className="w-full p-3 rounded-xl border border-gray-200 bg-white"
           />
+        </div>
+      )}
+
+      {!isRecurring && (
+        <div className="space-y-1">
+          <div className="text-xs text-gray-500">Plan month (optional)</div>
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={plannedMonth}
+              onChange={(e) => {
+                const value = e.target.value ? Number(e.target.value) : "";
+                setPlannedMonth(value);
+                if (!value) setPlannedWeek("");
+                if (value) setDueDate("");
+              }}
+              className="w-full p-3 rounded-xl border border-gray-200 bg-white"
+            >
+              <option value="">No month</option>
+              {monthNames.map((m, i) => (
+                <option key={m} value={i + 1}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <select
+              value={plannedWeek}
+              onChange={(e) => setPlannedWeek(e.target.value ? Number(e.target.value) : "")}
+              disabled={!plannedMonth}
+              className="w-full p-3 rounded-xl border border-gray-200 bg-white disabled:opacity-60"
+            >
+              <option value="">Any week</option>
+              <option value="1">Week 1</option>
+              <option value="2">Week 2</option>
+              <option value="3">Week 3</option>
+              <option value="4">Week 4</option>
+              <option value="5">Week 5</option>
+            </select>
+          </div>
+          <div className="text-xs text-gray-400">Use this instead of a specific due date.</div>
+        </div>
+      )}
+
+      {isRecurring && (
+        <div className="space-y-1">
+          <div className="text-xs text-gray-500">Recurring schedule (optional)</div>
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={recurrenceMonth}
+              onChange={(e) => {
+                const value = e.target.value ? Number(e.target.value) : "";
+                setRecurrenceMonth(value);
+                if (!value) setRecurrenceWeek("");
+              }}
+              disabled={unit !== "year"}
+              className="w-full p-3 rounded-xl border border-gray-200 bg-white disabled:opacity-60"
+            >
+              <option value="">Any month</option>
+              {monthNames.map((m, i) => (
+                <option key={m} value={i + 1}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <select
+              value={recurrenceWeek}
+              onChange={(e) => setRecurrenceWeek(e.target.value ? Number(e.target.value) : "")}
+              disabled={unit === "year" ? !recurrenceMonth : unit !== "month"}
+              className="w-full p-3 rounded-xl border border-gray-200 bg-white disabled:opacity-60"
+            >
+              <option value="">Any week</option>
+              <option value="1">Week 1</option>
+              <option value="2">Week 2</option>
+              <option value="3">Week 3</option>
+              <option value="4">Week 4</option>
+              <option value="5">Week 5</option>
+            </select>
+          </div>
+          <div className="text-xs text-gray-400">Set unit to Year(s) to pick a month, or Month(s) to pick a week.</div>
         </div>
       )}
 
@@ -632,6 +804,26 @@ function QuickAddTask({
           if (!title.trim()) return;
           const cleanTitle = title.trim();
           const today = toISODate(new Date()) as any;
+          const plannedMonthValue =
+            recurrence.kind === "none" && !dueDate && plannedMonth ? Number(plannedMonth) : undefined;
+          const plannedWeekValue =
+            plannedMonthValue && plannedWeek ? Number(plannedWeek) : undefined;
+          const recurrenceMonthValue =
+            recurrence.kind !== "none" && unit === "year" && recurrenceMonth
+              ? Number(recurrenceMonth)
+              : undefined;
+          const recurrenceWeekValue =
+            recurrence.kind !== "none" && (unit === "month" || (unit === "year" && recurrenceMonth)) && recurrenceWeek
+              ? Number(recurrenceWeek)
+              : undefined;
+          const nextDueDate =
+            recurrence.kind !== "none"
+              ? computeInitialDueDate(
+                  today,
+                  { kind: "every", interval, unit },
+                  { month: recurrenceMonthValue, week: recurrenceWeekValue }
+                ) ?? today
+              : undefined;
 
           const task: Omit<Task, "id" | "createdAt"> = {
             title: cleanTitle,
@@ -640,7 +832,11 @@ function QuickAddTask({
             recurrence:
               recurrence.kind === "none" ? { kind: "none" } : { kind: "every", interval, unit },
             dueDate: recurrence.kind === "none" && dueDate ? (dueDate as any) : undefined,
-            nextDueDate: recurrence.kind !== "none" ? today : undefined,
+            plannedMonth: plannedMonthValue,
+            plannedWeek: plannedWeekValue,
+            nextDueDate,
+            recurrenceMonth: recurrenceMonthValue,
+            recurrenceWeek: recurrenceWeekValue,
           };
 
           onAdd(task);
@@ -656,12 +852,14 @@ function QuickAddTask({
 function EditTask({
   task,
   categories,
+  today,
   onSave,
   onComplete,
   onDelete,
 }: {
   task: Task;
   categories: Category[];
+  today: ISODate;
   onSave: (patch: Partial<Task>) => void;
   onComplete: () => void;
   onDelete: () => void;
@@ -670,6 +868,10 @@ function EditTask({
   const [title, setTitle] = useState(task.title);
   const [categoryId, setCategoryId] = useState(task.categoryId);
   const [dueDate, setDueDate] = useState(task.dueDate ?? "");
+  const [plannedMonth, setPlannedMonth] = useState<number | "">(task.plannedMonth ?? "");
+  const [plannedWeek, setPlannedWeek] = useState<number | "">(task.plannedWeek ?? "");
+  const [recurrenceMonth, setRecurrenceMonth] = useState<number | "">(task.recurrenceMonth ?? "");
+  const [recurrenceWeek, setRecurrenceWeek] = useState<number | "">(task.recurrenceWeek ?? "");
   const [interval, setInterval] = useState(isRecurring && task.recurrence.kind !== "none" ? task.recurrence.interval : 1);
   const [unit, setUnit] = useState(isRecurring && task.recurrence.kind !== "none" ? task.recurrence.unit : "week");
 
@@ -677,6 +879,10 @@ function EditTask({
     setTitle(task.title);
     setCategoryId(task.categoryId);
     setDueDate(task.dueDate ?? "");
+    setPlannedMonth(task.plannedMonth ?? "");
+    setPlannedWeek(task.plannedWeek ?? "");
+    setRecurrenceMonth(task.recurrenceMonth ?? "");
+    setRecurrenceWeek(task.recurrenceWeek ?? "");
     setInterval(isRecurring && task.recurrence.kind !== "none" ? task.recurrence.interval : 1);
     setUnit(isRecurring && task.recurrence.kind !== "none" ? task.recurrence.unit : "week");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -709,7 +915,7 @@ function EditTask({
         </select>
 
         <div className="p-3 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-600 flex items-center justify-center">
-          {recurrenceLabel(task.recurrence)}
+          {recurrenceLabel(task)}
         </div>
       </div>
 
@@ -719,9 +925,55 @@ function EditTask({
           <input
             type="date"
             value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setDueDate(next);
+              if (next) {
+                setPlannedMonth("");
+                setPlannedWeek("");
+              }
+            }}
             className="w-full p-3 rounded-xl border border-gray-200 bg-white"
           />
+        </div>
+      )}
+
+      {!isRecurring && (
+        <div className="space-y-1">
+          <div className="text-xs text-gray-500">Plan month (optional)</div>
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={plannedMonth}
+              onChange={(e) => {
+                const value = e.target.value ? Number(e.target.value) : "";
+                setPlannedMonth(value);
+                if (!value) setPlannedWeek("");
+                if (value) setDueDate("");
+              }}
+              className="w-full p-3 rounded-xl border border-gray-200 bg-white"
+            >
+              <option value="">No month</option>
+              {monthNames.map((m, i) => (
+                <option key={m} value={i + 1}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <select
+              value={plannedWeek}
+              onChange={(e) => setPlannedWeek(e.target.value ? Number(e.target.value) : "")}
+              disabled={!plannedMonth}
+              className="w-full p-3 rounded-xl border border-gray-200 bg-white disabled:opacity-60"
+            >
+              <option value="">Any week</option>
+              <option value="1">Week 1</option>
+              <option value="2">Week 2</option>
+              <option value="3">Week 3</option>
+              <option value="4">Week 4</option>
+              <option value="5">Week 5</option>
+            </select>
+          </div>
+          <div className="text-xs text-gray-400">Use this instead of a specific due date.</div>
         </div>
       )}
 
@@ -736,7 +988,12 @@ function EditTask({
           />
           <select
             value={unit}
-            onChange={(e) => setUnit(e.target.value as any)}
+            onChange={(e) => {
+              const next = e.target.value as any;
+              setUnit(next);
+              if (next !== "year") setRecurrenceMonth("");
+              if (next !== "year" && next !== "month") setRecurrenceWeek("");
+            }}
             className="w-full p-3 rounded-xl border border-gray-200 bg-white"
           >
             <option value="day">Day(s)</option>
@@ -745,8 +1002,67 @@ function EditTask({
             <option value="year">Year(s)</option>
           </select>
 
+          {isRecurring && (
+            <>
+              <select
+                value={recurrenceMonth}
+                onChange={(e) => {
+                  const value = e.target.value ? Number(e.target.value) : "";
+                  setRecurrenceMonth(value);
+                  if (!value) setRecurrenceWeek("");
+                }}
+                disabled={unit !== "year"}
+                className="w-full p-3 rounded-xl border border-gray-200 bg-white disabled:opacity-60"
+              >
+                <option value="">Any month</option>
+                {monthNames.map((m, i) => (
+                  <option key={m} value={i + 1}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={recurrenceWeek}
+                onChange={(e) => setRecurrenceWeek(e.target.value ? Number(e.target.value) : "")}
+                disabled={unit === "year" ? !recurrenceMonth : unit !== "month"}
+                className="w-full p-3 rounded-xl border border-gray-200 bg-white disabled:opacity-60"
+              >
+                <option value="">Any week</option>
+                <option value="1">Week 1</option>
+                <option value="2">Week 2</option>
+                <option value="3">Week 3</option>
+                <option value="4">Week 4</option>
+                <option value="5">Week 5</option>
+              </select>
+            </>
+          )}
+
+          <div className="col-span-2 text-xs text-gray-400">
+            Set unit to Year(s) to pick a month, or Month(s) to pick a week.
+          </div>
+
           <button
-            onClick={() => onSave({ recurrence: { kind: "every", interval, unit } as any })}
+            onClick={() =>
+              onSave({
+                recurrence: { kind: "every", interval, unit } as any,
+                recurrenceMonth: unit === "year" && recurrenceMonth ? Number(recurrenceMonth) : undefined,
+                recurrenceWeek:
+                  (unit === "month" || (unit === "year" && recurrenceMonth)) && recurrenceWeek
+                    ? Number(recurrenceWeek)
+                    : undefined,
+                nextDueDate: computeInitialDueDate(
+                  today,
+                  { kind: "every", interval, unit },
+                  {
+                    month: unit === "year" && recurrenceMonth ? Number(recurrenceMonth) : undefined,
+                    week:
+                      (unit === "month" || (unit === "year" && recurrenceMonth)) && recurrenceWeek
+                        ? Number(recurrenceWeek)
+                        : undefined,
+                  }
+                ),
+              })
+            }
             className="col-span-2 py-3 rounded-xl bg-gray-900 text-white font-semibold active:opacity-90"
           >
             Update Recurrence
@@ -760,6 +1076,13 @@ function EditTask({
             title: title.trim(),
             categoryId,
             dueDate: dueDate ? (dueDate as any) : undefined,
+            plannedMonth: !dueDate && plannedMonth ? Number(plannedMonth) : undefined,
+            plannedWeek: !dueDate && plannedMonth && plannedWeek ? Number(plannedWeek) : undefined,
+            recurrenceMonth: unit === "year" && recurrenceMonth ? Number(recurrenceMonth) : undefined,
+            recurrenceWeek:
+              (unit === "month" || (unit === "year" && recurrenceMonth)) && recurrenceWeek
+                ? Number(recurrenceWeek)
+                : undefined,
           })
         }
         className="w-full py-3 rounded-xl bg-black text-white font-semibold active:opacity-90"

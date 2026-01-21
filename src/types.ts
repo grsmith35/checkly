@@ -21,10 +21,14 @@ export type Task = {
 
   // One-time tasks
   dueDate?: ISODate; // optional
+  plannedMonth?: number; // 1-12
+  plannedWeek?: number; // 1-5, optional
 
   // Recurring tasks
   recurrence: RecurrenceRule;
   nextDueDate?: ISODate;
+  recurrenceMonth?: number; // 1-12, for yearly recurrence
+  recurrenceWeek?: number; // 1-5, for month/year recurrence
 
   lastCompletedAt?: number;
   completedAt?: number; // for one-time completion

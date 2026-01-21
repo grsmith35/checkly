@@ -96,7 +96,10 @@ export function completeTask(state: AppState, taskId: string, today: ISODate): A
 
     // Recurring
     if (t.recurrence.kind !== "none" && t.nextDueDate) {
-      const nextDue = computeNextDueDate(t.nextDueDate, t.recurrence, today);
+      const nextDue = computeNextDueDate(t.nextDueDate, t.recurrence, today, {
+        month: t.recurrenceMonth,
+        week: t.recurrenceWeek,
+      });
       return {
         ...t,
         lastCompletedAt: Date.now(),
@@ -134,5 +137,11 @@ export function getOverdue(state: AppState, today: ISODate) {
 export function getAnytime(state: AppState) {
   return state.tasks
     .filter((t) => !t.archived)
-    .filter((t) => t.recurrence.kind === "none" && !t.dueDate && !t.completedAt);
+    .filter(
+      (t) =>
+        t.recurrence.kind === "none" &&
+        !t.dueDate &&
+        !t.plannedMonth &&
+        !t.completedAt
+    );
 }
