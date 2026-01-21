@@ -20,6 +20,7 @@ function advanceConstrained(
   rule: RecurrenceRule,
   constraint: RecurrenceConstraint
 ): ISODate {
+  if (rule.kind !== "every") return baseDue;
   const interval = Math.max(1, rule.interval);
   const base = fromISODate(baseDue);
 
@@ -45,6 +46,7 @@ export function computeNextDueDate(
   constraint?: RecurrenceConstraint
 ): ISODate | undefined {
   if (rule.kind === "none") return undefined;
+  if (rule.kind !== "every") return undefined;
 
   const hasConstraint = !!(constraint?.month || constraint?.week);
   const constraintApplies =
@@ -84,6 +86,7 @@ export function computeInitialDueDate(
   constraint?: RecurrenceConstraint
 ): ISODate | undefined {
   if (rule.kind === "none") return undefined;
+  if (rule.kind !== "every") return undefined;
 
   const hasConstraint = !!(constraint?.month || constraint?.week);
   const constraintApplies =
