@@ -5,6 +5,7 @@ import {
   addGoal,
   addTask,
   completeTask,
+  computeGoalStreak,
   deleteGoal,
   deleteTask,
   ensureTodayGoalLogs,
@@ -193,6 +194,7 @@ export default function App() {
   const goals = useMemo(() => goalsForToday(state, today), [state, today]);
   const goalsDone = goals.filter((x) => x.log?.completed).length;
   const goalsTotal = goals.length;
+  const goalStreak = useMemo(() => computeGoalStreak(state, today), [state, today]);
 
   const dueToday = useMemo(() => getDueToday(state, today), [state, today]);
   const overdue = useMemo(() => getOverdue(state, today), [state, today]);
@@ -223,7 +225,15 @@ export default function App() {
         <div className="flex-1 overflow-auto px-4 pb-24 space-y-4">
           {tab === "today" && (
             <>
-              <Section title="Daily Goals" right={<Pill>{goalsDone}/{goalsTotal} done</Pill>}>
+              <Section
+                title="Daily Goals"
+                right={
+                  <div className="flex items-center gap-2">
+                    <Pill>{goalsDone}/{goalsTotal} done</Pill>
+                    <Pill>{goalStreak} day streak</Pill>
+                  </div>
+                }
+              >
                 <div className="space-y-2">
                   {goals.map(({ goal, log }) => (
                     <button

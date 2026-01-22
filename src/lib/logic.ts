@@ -1,5 +1,5 @@
 import { AppState, DailyGoalLog, GoalDefinition, ISODate, Task } from "../types";
-import { isBefore, toISODate } from "./date";
+import { addDays, fromISODate, isBefore, toISODate } from "./date";
 import { computeNextDueDate } from "./recurrence";
 
 export function todayISO(): ISODate {
@@ -44,6 +44,39 @@ export function goalsForToday(state: AppState, today: ISODate) {
   const logs = state.goalLogs.filter((l) => l.date === today);
   const byId = new Map(logs.map((l) => [l.goalId, l] as const));
   return activeGoals.map((g) => ({ goal: g, log: byId.get(g.id) }));
+}
+
+export function computeGoalStreak(state: AppState, today: ISODate): number {
+  const activeGoals = state.goals.filter((g) => g.active);
+  if (activeGoals.length === 0) return 0;
+
+  const logsByDate = new Map<ISODate, Map<string, boolean>>();
+  for (const log of state.goalLogs) {
+    if (!logsByDate.has(log.date)) logsByDate.set(log.date, new Map());
+    logsByDate.get(log.date)!.set(log.goalId, !!log.completed);
+  }
+
+  const completedDates = new Set<ISODate>();
+  for (const [date, byGoal] of logsByDate.entries()) {
+    let allDone = true;
+    for (const g of activeGoals) {
+      if (!byGoal.get(g.id)) {
+        allDone = false;
+        break;
+      }
+    }
+    if (allDone) completedDates.add(date);
+  }
+
+  let streak = 0;
+  let cursor = today;
+  while (completedDates.has(cursor)) {
+    streak += 1;
+    const prev = addDays(fromISODate(cursor), -1);
+    cursor = toISODate(prev);
+  }
+
+  return streak;
 }
 
 export function addGoal(state: AppState, title: string): AppState {
